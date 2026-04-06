@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { 
   Plus, 
   Search, 
@@ -36,6 +37,7 @@ export default function Customers() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const { user } = useAuth();
 
   const openEditModal = (customer: any) => {
     setSelectedCustomer(customer);
@@ -117,9 +119,11 @@ export default function Customers() {
                         >
                           <Edit className="w-4 h-4" /> Düzenle
                         </button>
-                        <button className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
-                          <Trash2 className="w-4 h-4" /> Sil
-                        </button>
+                        {user?.role === 'admin' && (
+                          <button className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
+                            <Trash2 className="w-4 h-4" /> Sil
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Building2, 
@@ -12,9 +12,11 @@ import {
   Search,
   UserCircle,
   FileText,
-  PieChart
+  PieChart,
+  LogOut
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useAuth } from '../context/AuthContext';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
@@ -28,6 +30,13 @@ const navItems = [
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans selection:bg-indigo-100 selection:text-indigo-900">
@@ -87,14 +96,23 @@ export default function Layout() {
         </nav>
 
         <div className="p-4 border-t border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer">
-            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold shadow-sm border border-indigo-200">
-              BY
+          <div className="flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold shadow-sm border border-indigo-200">
+                {user?.initials || 'U'}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm font-bold text-slate-900">{user?.name || 'Kullanıcı'}</span>
+                <span className="text-xs text-slate-500 font-medium">{user?.title || 'Danışman'}</span>
+              </div>
             </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-bold text-slate-900">Batuhan Yağlu</span>
-              <span className="text-xs text-slate-500 font-medium">Şube Müdürü</span>
-            </div>
+            <button 
+              onClick={handleLogout}
+              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              title="Çıkış Yap"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
         </div>
       </aside>

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
+import { useAuth } from '../context/AuthContext';
 
 // Fix Leaflet default icon issue
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
@@ -48,6 +49,7 @@ const statusColors: Record<string, string> = {
 export default function Listings() {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const { user } = useAuth();
 
   return (
     <div className="space-y-6">
@@ -178,9 +180,11 @@ export default function Listings() {
                         <button className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Düzenle">
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Sil">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {user?.role === 'admin' && (
+                          <button className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Sil">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
