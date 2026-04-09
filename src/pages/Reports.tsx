@@ -1,95 +1,258 @@
-import React from 'react';
-import { 
-  PieChart as PieChartIcon, 
-  TrendingUp, 
-  DollarSign, 
-  Download,
-  Calendar,
-  Filter
-} from 'lucide-react';
-import { 
-  PieChart, 
-  Pie, 
-  Cell, 
-  ResponsiveContainer,
-  Tooltip,
-  Legend,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid
-} from 'recharts';
-
-const commissionData = [
-  { name: 'Satış', value: 450000 },
-  { name: 'Kiralama', value: 120000 },
-  { name: 'Danışmanlık', value: 35000 },
-];
+import React, { useEffect, useMemo, useState } from 'react';
+import { PieChart as PieChartIcon, TrendingUp, DollarSign, Download, Calendar, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 
 const COLORS = ['#4f46e5', '#10b981', '#8b5cf6'];
 
-const monthlyData = [
-  { name: 'Oca', satis: 4000, kira: 2400 },
-  { name: 'Şub', satis: 3000, kira: 1398 },
-  { name: 'Mar', satis: 2000, kira: 9800 },
-  { name: 'Nis', satis: 2780, kira: 3908 },
-  { name: 'May', satis: 1890, kira: 4800 },
-  { name: 'Haz', satis: 2390, kira: 3800 },
-];
-
-const detailedCommissions = [
-  { id: 'TRX-001', date: '05.04.2026', type: 'Satış', property: 'Kadıköy Moda 3+1', amount: '12.500.000 ₺', commission: '250.000 ₺', status: 'Ödendi' },
-  { id: 'TRX-002', date: '02.04.2026', type: 'Kiralama', property: 'Şişli Bomonti 1+1', amount: '45.000 ₺', commission: '45.000 ₺', status: 'Bekliyor' },
-  { id: 'TRX-003', date: '28.03.2026', type: 'Satış', property: 'Beşiktaş Merkez 2+1', amount: '8.200.000 ₺', commission: '164.000 ₺', status: 'Ödendi' },
-  { id: 'TRX-004', date: '15.03.2026', type: 'Danışmanlık', property: 'Ticari Değerleme', amount: '-', commission: '35.000 ₺', status: 'Ödendi' },
-  { id: 'TRX-005', date: '10.03.2026', type: 'Kiralama', property: 'Ataşehir Ofis', amount: '75.000 ₺', commission: '75.000 ₺', status: 'Ödendi' },
-];
-
 export default function Reports() {
+  const { user, hasAnyPermission, hasPermission } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [listingsCount, setListingsCount] = useState(0);
+  const [customersCount, setCustomersCount] = useState(0);
+  const [closedTasks, setClosedTasks] = useState(0);
+  const [monthly, setMonthly] = useState<{ name: string; satis: number; kira: number }[]>([]);
+  const [agentRows, setAgentRows] = useState<{ name: string; listings: number; customers: number; tasks: number }[]>([]);
+  const [commissionRateSale, setCommissionRateSale] = useState(2);
+  const [commissionRateRent, setCommissionRateRent] = useState(10);
+  const [agentCommissions, setAgentCommissions] = useState<{ name: string; total: number }[]>([]);
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    fetchData();
+  }, [user, monthOffset]);
+
+  async function fetchData() {
+    if (!user?.tenant_id) return;
+    setLoading(true);
+
+    const [{ count: listingCount }, { count: customerCount }, { count: closedCount }] = await Promise.all([
+      supabase.from('listings').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id),
+      supabase.from('customers').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id),
+      supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id).eq('stage', 'closed'),
+    ]);
+
+    setListingsCount(listingCount || 0);
+    setCustomersCount(customerCount || 0);
+    setClosedTasks(closedCount || 0);
+
+    const now = new Date();
+    const base = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1);
+    const months = Array.from({ length: 6 }).map((_, i) => {
+      const d = new Date(base.getFullYear(), base.getMonth() - (5 - i), 1);
+      return {
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        name: d.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' })
+      };
+    });
+
+    const monthlyData = months.map(m => ({ name: m.name, satis: 0, kira: 0 }));
+    setMonthly(monthlyData);
+
+    const { data: tenant } = await supabase
+      .from('tenants')
+      .select('settings')
+      .eq('id', user.tenant_id)
+      .single();
+    const tenantSettings = (tenant?.settings || {}) as any;
+    setCommissionRateSale(Number(tenantSettings.commission_sale_rate || 2));
+    setCommissionRateRent(Number(tenantSettings.commission_rent_rate || 10));
+
+    const { data: agents } = await supabase
+      .from('users')
+      .select('id, full_name, branch_id')
+      .eq('tenant_id', user.tenant_id)
+      .order('full_name');
+
+    const agentStats = [] as { name: string; listings: number; customers: number; tasks: number }[];
+    const commissionRows = [] as { name: string; total: number }[];
+    const canSeeBranch = hasPermission('rapor:view:branch') || user.data_scope === 'branch' || user.data_scope === 'branch_visible';
+    const canSeeAll = hasPermission('rapor:view:branch') || hasPermission('*') || user.data_scope === 'global';
+    const filteredAgents = canSeeAll
+      ? (agents || [])
+      : canSeeBranch
+        ? (agents || []).filter((agent) => agent.branch_id === user.branch_id)
+        : (agents || []).filter((agent) => agent.id === user.id);
+
+    for (const agent of filteredAgents) {
+      const [lc, cc, tc] = await Promise.all([
+        supabase.from('listings').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id).eq('agent_id', agent.id),
+        supabase.from('customers').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id).eq('assigned_agent_id', agent.id),
+        supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('tenant_id', user.tenant_id).eq('assigned_to', agent.id)
+      ]);
+      agentStats.push({
+        name: agent.full_name,
+        listings: lc.count || 0,
+        customers: cc.count || 0,
+        tasks: tc.count || 0
+      });
+
+      const { data: contracts } = await supabase
+        .from('contracts')
+        .select('amount, type')
+        .eq('tenant_id', user.tenant_id)
+        .eq('created_by', agent.id)
+        .eq('status', 'imzalandı');
+
+      let total = 0;
+      for (const contract of contracts || []) {
+        const amount = Number(contract.amount || 0);
+        if (!amount) continue;
+        if (contract.type === 'kiralama') {
+          total += (amount * commissionRateRent) / 100;
+        } else {
+          total += (amount * commissionRateSale) / 100;
+        }
+      }
+      commissionRows.push({ name: agent.full_name, total });
+    }
+    setAgentRows(agentStats);
+    setAgentCommissions(commissionRows);
+
+    setLoading(false);
+  }
+
+  const commissionData = useMemo(() => ([
+    { name: 'İlan', value: listingsCount * 1000 },
+    { name: 'Müşteri', value: customersCount * 500 },
+    { name: 'Kapanan', value: closedTasks * 1500 },
+  ]), [listingsCount, customersCount, closedTasks]);
+
+  function exportPdf() {
+    setExporting(true);
+    const doc = new jsPDF();
+    doc.setFillColor(79, 70, 229);
+    doc.rect(14, 12, 182, 10, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.text('Emlak CRM Pro', 16, 19);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    doc.text(`Tarih: ${new Date().toLocaleDateString('tr-TR')}`, 150, 19);
+
+    doc.setFontSize(12);
+    doc.text('Genel Ozet', 14, 34);
+    doc.setFontSize(11);
+    doc.text(`Toplam Ilan: ${listingsCount}`, 14, 44);
+    doc.text(`Toplam Musteri: ${customersCount}`, 14, 52);
+    doc.text(`Kapanan Islem: ${closedTasks}`, 14, 60);
+
+    doc.setFontSize(12);
+    doc.text('Aylik Tablo', 14, 74);
+
+    const startX = 14;
+    const startY = 80;
+    const colWidths = [40, 50, 50];
+    const rowHeight = 8;
+
+    doc.setFillColor(240, 242, 247);
+    doc.rect(startX, startY, colWidths.reduce((a, b) => a + b, 0), rowHeight, 'F');
+    doc.setTextColor(45, 55, 72);
+    doc.setFontSize(10);
+    doc.text('Ay', startX + 2, startY + 5.5);
+    doc.text('Satis', startX + colWidths[0] + 2, startY + 5.5);
+    doc.text('Kiralama', startX + colWidths[0] + colWidths[1] + 2, startY + 5.5);
+
+    let y = startY + rowHeight;
+    doc.setTextColor(0, 0, 0);
+    monthly.forEach((m) => {
+      doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowHeight);
+      doc.text(m.name, startX + 2, y + 5.5);
+      doc.text(String(m.satis), startX + colWidths[0] + 2, y + 5.5);
+      doc.text(String(m.kira), startX + colWidths[0] + colWidths[1] + 2, y + 5.5);
+      y += rowHeight;
+    });
+
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Rapor otomatik uretilmistir.', 14, 285);
+
+    doc.save(`rapor-${new Date().toISOString().slice(0,10)}.pdf`);
+    setExporting(false);
+  }
+
+  function exportExcel() {
+    setExporting(true);
+    const rows = monthly.map((m) => ({
+      Ay: m.name,
+      Satış: m.satis,
+      Kiralama: m.kira,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Aylik');
+    XLSX.writeFile(wb, `rapor-${new Date().toISOString().slice(0,10)}.xlsx`);
+    setExporting(false);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Raporlar & Prim</h1>
-          <p className="text-slate-500 text-sm mt-1">Komisyon gelirleri, prim hakedişleri ve performans analizleri.</p>
+          <p className="text-slate-500 text-sm mt-1">Komisyon gelirleri ve performans özetleri.</p>
         </div>
-        <div className="flex gap-2">
-          <button className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2">
-            <Calendar className="w-4 h-4" />
-            Bu Ay
-          </button>
-          <button className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm shadow-indigo-200 flex items-center gap-2">
+         <div className="flex gap-2 items-center">
+           <button
+             onClick={() => setMonthOffset((prev) => prev + 1)}
+             className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2"
+           >
+             <ChevronLeft className="w-4 h-4" /> Önceki 6 Ay
+           </button>
+           <button
+             onClick={() => setMonthOffset((prev) => Math.max(0, prev - 1))}
+             className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2"
+             disabled={monthOffset === 0}
+           >
+             Sonraki 6 Ay <ChevronRight className="w-4 h-4" />
+           </button>
+           <button
+             onClick={exportPdf}
+             disabled={exporting}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm shadow-indigo-200 flex items-center gap-2 disabled:opacity-50"
+          >
             <Download className="w-4 h-4" />
             PDF İndir
+          </button>
+          <button
+            onClick={exportExcel}
+            disabled={exporting}
+            className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" />
+            Excel İndir
           </button>
         </div>
       </div>
 
-      {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-slate-500 text-sm font-bold">Toplam Brüt Komisyon</h3>
+            <h3 className="text-slate-500 text-sm font-bold">Toplam İlan</h3>
             <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center border border-indigo-200">
               <DollarSign className="w-5 h-5 text-indigo-600" />
             </div>
           </div>
-          <p className="text-3xl font-bold text-slate-900 tracking-tight">605.000 ₺</p>
+          <p className="text-3xl font-bold text-slate-900 tracking-tight">{listingsCount}</p>
           <p className="text-sm text-emerald-600 font-bold mt-2 flex items-center gap-1">
-            <TrendingUp className="w-4 h-4" /> +12% geçen aya göre
+            <TrendingUp className="w-4 h-4" /> +0%
           </p>
         </div>
-        
+
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-slate-500 text-sm font-bold">Tahmini Net Prim (Danışman)</h3>
+            <h3 className="text-slate-500 text-sm font-bold">Toplam Müşteri</h3>
             <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center border border-emerald-200">
               <PieChartIcon className="w-5 h-5 text-emerald-600" />
             </div>
           </div>
-          <p className="text-3xl font-bold text-slate-900 tracking-tight">242.000 ₺</p>
-          <p className="text-sm text-slate-500 font-medium mt-2">%40 Prim Oranı Üzerinden</p>
+          <p className="text-3xl font-bold text-slate-900 tracking-tight">{customersCount}</p>
+          <p className="text-sm text-slate-500 font-medium mt-2">Güncel müşteri sayısı</p>
         </div>
 
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
@@ -99,37 +262,25 @@ export default function Reports() {
               <TrendingUp className="w-5 h-5 text-purple-600" />
             </div>
           </div>
-          <p className="text-3xl font-bold text-slate-900 tracking-tight">14</p>
+          <p className="text-3xl font-bold text-slate-900 tracking-tight">{closedTasks}</p>
           <p className="text-sm text-emerald-600 font-bold mt-2 flex items-center gap-1">
-            <TrendingUp className="w-4 h-4" /> +3 işlem geçen aya göre
+            <TrendingUp className="w-4 h-4" /> +0 işlem
           </p>
         </div>
       </div>
 
-      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900 mb-6 tracking-tight">Gelir Dağılımı</h3>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie
-                  data={commissionData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={80}
-                  outerRadius={110}
-                  paddingAngle={5}
-                  dataKey="value"
-                >
+                <Pie data={commissionData} cx="50%" cy="50%" innerRadius={80} outerRadius={110} paddingAngle={5} dataKey="value">
                   {commissionData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip 
-                  formatter={(value) => `${value.toLocaleString('tr-TR')} ₺`}
-                  contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold' }}
-                />
+                <Tooltip />
                 <Legend verticalAlign="bottom" height={36} iconType="circle" />
               </PieChart>
             </ResponsiveContainer>
@@ -140,14 +291,11 @@ export default function Reports() {
           <h3 className="text-lg font-bold text-slate-900 mb-6 tracking-tight">Aylık İşlem Hacmi</h3>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={monthly} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12, fontWeight: 500 }} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12, fontWeight: 500 }} />
-                <Tooltip 
-                  cursor={{ fill: '#f1f5f9' }} 
-                  contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold' }} 
-                />
+                <Tooltip />
                 <Legend verticalAlign="top" height={36} iconType="circle" />
                 <Bar dataKey="satis" name="Satış" stackId="a" fill="#4f46e5" radius={[0, 0, 4, 4]} barSize={32} />
                 <Bar dataKey="kira" name="Kiralama" stackId="a" fill="#10b981" radius={[4, 4, 0, 0]} barSize={32} />
@@ -157,51 +305,73 @@ export default function Reports() {
         </div>
       </div>
 
-      {/* Detailed Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h3 className="text-lg font-bold text-slate-900 tracking-tight">Detaylı Prim & İşlem Dökümü</h3>
-          <button className="text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-slate-200">
-            <Filter className="w-4 h-4" /> Filtrele
-          </button>
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900 mb-6 tracking-tight">Komisyon Oranları</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+            <p className="text-xs text-slate-500 font-bold mb-2">Satış Komisyon</p>
+            <p className="text-2xl font-bold text-slate-900">%{commissionRateSale}</p>
+          </div>
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+            <p className="text-xs text-slate-500 font-bold mb-2">Kiralama Komisyon</p>
+            <p className="text-2xl font-bold text-slate-900">%{commissionRateRent}</p>
+          </div>
         </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900 mb-6 tracking-tight">Çalışan Performansı</h3>
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-100">
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">İşlem ID</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">Tarih</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">Tip</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">Mülk</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">İşlem Bedeli</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">Brüt Komisyon</th>
-                <th className="py-4 px-6 text-xs font-bold text-slate-500 uppercase tracking-wider">Durum</th>
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-500">
+              <tr>
+                <th className="py-2">Çalışan</th>
+                <th className="py-2">İlan</th>
+                <th className="py-2">Müşteri</th>
+                <th className="py-2">Görev</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {detailedCommissions.map((item, index) => (
-                <tr key={index} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="py-4 px-6 text-sm font-bold text-slate-900">{item.id}</td>
-                  <td className="py-4 px-6 text-sm text-slate-600 font-medium">{item.date}</td>
-                  <td className="py-4 px-6 text-sm">
-                    <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
-                      item.type === 'Satış' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' : 
-                      item.type === 'Kiralama' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 
-                      'bg-purple-50 text-purple-700 border-purple-100'
-                    }`}>
-                      {item.type}
-                    </span>
+            <tbody className="text-slate-700">
+              {agentRows.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-3 text-slate-500">Kayıt yok.</td>
+                </tr>
+              ) : agentRows.map((row) => (
+                <tr key={row.name} className="border-t border-slate-100">
+                  <td className="py-3 font-medium flex items-center gap-2">
+                    <Users className="w-4 h-4 text-slate-400" /> {row.name}
                   </td>
-                  <td className="py-4 px-6 text-sm font-bold text-slate-700">{item.property}</td>
-                  <td className="py-4 px-6 text-sm font-bold text-slate-900">{item.amount}</td>
-                  <td className="py-4 px-6 text-sm font-bold text-emerald-600">{item.commission}</td>
-                  <td className="py-4 px-6 text-sm">
-                    <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
-                      item.status === 'Ödendi' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'
-                    }`}>
-                      {item.status}
-                    </span>
+                  <td className="py-3">{row.listings}</td>
+                  <td className="py-3">{row.customers}</td>
+                  <td className="py-3">{row.tasks}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900 mb-6 tracking-tight">Çalışan Komisyon</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-500">
+              <tr>
+                <th className="py-2">Çalışan</th>
+                <th className="py-2">Toplam Komisyon</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              {agentCommissions.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="py-3 text-slate-500">Kayıt yok.</td>
+                </tr>
+              ) : agentCommissions.map((row) => (
+                <tr key={row.name} className="border-t border-slate-100">
+                  <td className="py-3 font-medium flex items-center gap-2">
+                    <Users className="w-4 h-4 text-slate-400" /> {row.name}
                   </td>
+                  <td className="py-3">{row.total.toLocaleString('tr-TR')} ₺</td>
                 </tr>
               ))}
             </tbody>

@@ -1,0 +1,34 @@
+{
+  "roles": {
+    "agent": {
+      "name": "Danışman",
+      "permissions": ["ilan:create:own", "ilan:read:own", "ilan:update:own", "ilan:delete:own", "musteri:create:own", "musteri:read:own", "musteri:update:own", "musteri:delete:own", "gorev:manage:own", "rapor:view:own"],
+      "data_scope": "own",
+      "bonus_features": ["ai_match:basic", "portal_publish:single", "signature:draft"]
+    },
+    "senior_agent": {
+      "name": "Kıdemli Danışman", 
+      "permissions": ["ilan:create:own", "ilan:read:branch", "ilan:update:own", "ilan:delete:own", "musteri:create:own", "musteri:read:branch", "musteri:update:own", "musteri:delete:own", "rapor:view:own"],
+      "data_scope": "branch_visible",
+      "bonus_features": ["ai_match:advanced", "portal_publish:single", "signature:create"]
+    },
+    "branch_manager": {
+      "name": "Şube Müdürü",
+      "permissions": ["ilan:approve:branch", "ilan:read:branch", "ilan:update:branch", "ilan:delete:branch", "musteri:read:branch", "musteri:update:branch", "musteri:delete:branch", "user:manage:branch", "rapor:view:branch", "portal:manage", "settings:manage"],
+      "data_scope": "branch",
+      "bonus_features": ["ai_match:report", "portal_publish:bulk", "signature:approve", "commission:manage"]
+    },
+    "admin": {
+      "name": "Genel Müdür",
+      "permissions": ["*"],
+      "data_scope": "global",
+      "bonus_features": ["*"]
+    },
+    "owner": {
+      "name": "Sahip",
+      "permissions": ["*"],
+      "data_scope": "global",
+      "bonus_features": ["*"]
+    }
+  }
+}
